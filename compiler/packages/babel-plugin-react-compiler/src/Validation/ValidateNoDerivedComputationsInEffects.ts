@@ -12,6 +12,7 @@ import {
   FunctionExpression,
   HIRFunction,
   IdentifierId,
+  IdentifierName,
   Place,
   isSetStateType,
   isUseEffectHookType,
@@ -66,6 +67,7 @@ export function validateNoDerivedComputationsInEffects(fn: HIRFunction): void {
     }
   } else if (fn.fnType === 'Component') {
     const props = fn.params[0];
+    console.log('PROPS: ', props);
     if (props != null && props.kind === 'Identifier') {
       derivedFromProps.set(props.identifier.id, props);
     }
@@ -82,9 +84,18 @@ export function validateNoDerivedComputationsInEffects(fn: HIRFunction): void {
             case 'Assign':
             case 'Alias':
             case 'MaybeAlias':
+            // TODO: This fixes "Only captures spread out props" issue
+            case 'ImmutableCapture':
             case 'Capture': {
               const source = derivedFromProps.get(effect.from.identifier.id);
-              if (source != null) {
+              // TODO: This is a hack to handle the case where the only prop is #t0. MUST FIX
+              if (
+                source != null &&
+                source.identifier.name !== null &&
+                source.identifier.name.value === '#t0'
+              ) {
+                derivedFromProps.set(effect.into.identifier.id, effect.into);
+              } else if (source != null) {
                 derivedFromProps.set(effect.into.identifier.id, source);
               }
               break;
@@ -116,13 +127,12 @@ export function validateNoDerivedComputationsInEffects(fn: HIRFunction): void {
         for (const [, block] of value.loweredFunc.func.body.blocks) {
           for (const instr of block.instructions) {
             if (instr.effects != null) {
-              console.group(printInstruction(instr));
               for (const effect of instr.effects) {
-                console.log(effect);
                 switch (effect.kind) {
                   case 'Assign':
                   case 'Alias':
                   case 'MaybeAlias':
+                  // TODO: Maybe also add "ImmutableCapture"
                   case 'Capture': {
                     const source = derivedFromProps.get(
                       effect.from.identifier.id,
@@ -135,13 +145,8 @@ export function validateNoDerivedComputationsInEffects(fn: HIRFunction): void {
                 }
               }
             }
-            console.groupEnd();
           }
         }
-      }
-
-      for (const [, place] of derivedFromProps) {
-        console.log(printPlace(place));
       }
 
       if (value.kind === 'LoadLocal') {
@@ -212,8 +217,10 @@ function validateEffect(
       return;
     }
   }
+
   for (const dep of effectDeps) {
-    console.log({dep});
+    console.log('DERIVED: ', derivedFromProps);
+    console.log('DEP: ', dep);
     if (
       effectFunction.context.find(operand => operand.identifier.id === dep) ==
         null ||
@@ -230,7 +237,6 @@ function validateEffect(
   const effectDerivedFromProps: Map<IdentifierId, Place> = new Map();
 
   for (const dep of effectDeps) {
-    console.log({dep});
     values.set(dep, [dep]);
     const propsSource = derivedFromProps.get(dep);
     if (propsSource != null) {
@@ -246,6 +252,8 @@ function validateEffect(
         return;
       }
     }
+
+    // TODO: Learn how this works
     for (const phi of block.phis) {
       const aggregateDeps: Set<IdentifierId> = new Set();
       let propsSource: Place | null = null;
@@ -338,6 +346,7 @@ function validateEffect(
             case 'Assign':
             case 'Alias':
             case 'MaybeAlias':
+            // TODO: Maybe also add "ImmutableCapture"
             case 'Capture': {
               const source = effectDerivedFromProps.get(
                 effect.from.identifier.id,
@@ -362,6 +371,7 @@ function validateEffect(
 
   for (const call of setStateCalls) {
     if (call.propsSource != null) {
+      console.log('CALL: ', call);
       const propName = call.propsSource.identifier.name?.value;
       const propInfo = propName != null ? ` (from prop '${propName}')` : '';
 
